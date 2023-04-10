@@ -2,3 +2,6 @@
 *.csv
 *.cfg
 __pycache__
+models
+scraper_output
+
