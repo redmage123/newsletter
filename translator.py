@@ -1,47 +1,113 @@
-import pandas as pd
 import os
-from pathlib import Path
-from typing import Tuple
-from transformers import MarianMTModel, MarianTokenizer
+import pandas as pd
 from langdetect import detect
-
+from transformers import MarianMTModel, MarianTokenizer
+import sys
+import glob
+import datetime
 
 class Translator:
-    def __init__(self, model_name: str):
-        self.model_name = model_name
-        self.tokenizer = MarianTokenizer.from_pretrained(self.model_name)
-        self.model = MarianMTModel.from_pretrained(self.model_name)
+    """
+    Translator class for translating text using MarianMT models.
+    """
 
-    def translate_text(self, text: str) -> str:
-        if detect(text) != 'en':
-            tokenized_text = self.tokenizer.prepare_seq2seq_batch([text], return_tensors="pt")
-            translated_output = self.model.generate(**tokenized_text)
-            return self.tokenizer.batch_decode(translated_output, skip_special_tokens=True)[0]
-        else:
+    def __init__(self, models_root="models"):
+        """
+        Initializes the Translator class.
+
+        Args:
+            models_root (str, optional): The root directory containing the translation models. Defaults to "models".
+        """
+        self.models_root = models_root
+
+    def translate_text(self, text, source_language):
+
+        """
+        Translates the given text to English.
+
+        Args:
+        text (str): The text to be translated.
+        source_language (str): The source language code.
+
+        Returns:
+        str: The translated text in English.
+        """
+
+        cache_dir = "/home/bbrelin/src/repos/newsletter/.cache"
+
+        if source_language == 'en':
             return text
+        elif source_language in {'es', 'pt'}:
+            model_name = "Helsinki-NLP/opus-mt-romance-en"
+        else:
+            try:
+                model_name = f"Helsinki-NLP/opus-mt-{source_language}-en"
+                model = MarianMTModel.from_pretrained(model_name,cache_dir = cache_dir)
+                tokenizer = MarianTokenizer.from_pretrained(model_name)
+            except OSError:
+                model_name = "Helsinki-NLP/opus-mt-mul-en"
+                model = MarianMTModel.from_pretrained(model_name,cache_dir = cache_dir)
+                tokenizer = MarianTokenizer.from_pretrained(model_name)
 
-    def process_data(self, data: pd.DataFrame) -> pd.DataFrame:
-        data['translated_text'] = data['text'].apply(self.translate_text)
+            inputs = tokenizer(text, return_tensors="pt")
+            translated = model.generate(**inputs)
+            return tokenizer.decode(translated[0], skip_special_tokens=True)
+
+
+
+    def process_data(self, data):
+
+        """
+        Processes the input DataFrame by translating the 'Content' column to English.
+
+        Args:
+            data (pd.DataFrame): The input DataFrame with a 'Content' column.
+
+
+        Returns:
+            pd.DataFrame: The output DataFrame with an additional 'translated_text' column containing the translated content in English.
+        """
+        data['translated_text'] = None
+
+        def safe_translation(text):
+           try:
+               lang = detect(text)
+               return self.translate_text(text, lang)
+           except Exception as e:
+               print(f"Error while translating text: {e}")
+            # Default to a specific model or skip translation
+               return text  # or self.translate_text(text, 'en')
+
+        data['translated_text'] = data['Content'].apply(safe_translation)
         return data
 
-    def save_data_to_csv(self, data: pd.DataFrame, output_csv: str):
-        data.to_csv(output_csv, index=False)
+def main(scraper_output_directory="/home/bbrelin/src/repos/newsletter/scraper_output"):
 
+    """
+    Reads data from the latest input CSV file in the scraper_output_directory, translates the content to English.
 
-def get_latest_file(dir_path: str) -> str:
-    dir = Path(dir_path)
-    return max(dir.glob("*.csv"), key=os.path.getctime)
+    Args:
+        scraper_output_directory (str, optional): The directory containing the scraper output CSV files. Defaults to "/home/bbrelin/src/repos/newsletter/scraper_output".
+    """
 
+    list_of_files = glob.glob(os.path.join(scraper_output_directory, "scrape_results_*.csv"))
+    latest_file = max(list_of_files, key=os.path.getmtime)
 
-def main(input_csv: str, output_csv: str):
-    data = pd.read_csv(input_csv)
-    processor = Translator(model_name="Helsinki-NLP/opus-mt-{}-en")
+    input_file_path = latest_file
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    output_file_name = f"translated_{os.path.basename(latest_file).split('_', 1)[1].split('.', 1)[0]}_{current_time}.csv"
+    output_file_path = os.path.join(os.getcwd(), "translated_output", output_file_name)
+
+    data = pd.read_csv(input_file_path)
+    processor = Translator()
     processed_data = processor.process_data(data)
-    processor.save_data_to_csv(processed_data, output_csv)
-
+    processed_data.to_csv(output_file_path, index=False)
 
 if __name__ == "__main__":
-    input_file = get_latest_file("scraper_output")
-    output_file = f"translated_data_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    main(input_file, output_file)
 
+    if len(sys.argv) == 2:
+        scraper_output_directory = sys.argv[1]
+    else:
+        scraper_output_directory = "/home/bbrelin/src/repos/newsletter/scraper_output"
+
+    main(scraper_output_directory)
