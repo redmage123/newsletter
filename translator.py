@@ -2,6 +2,7 @@ import os
 import pandas as pd
 from langdetect import detect
 from langdetect.lang_detect_exception import LangDetectException
+from langdetect import detect_langs
 from transformers import MarianMTModel, MarianTokenizer
 import sys
 import glob
@@ -61,18 +62,30 @@ class Translator:
         """
         data['translated_text'] = None
 
-        def safe_translation(texts, source_language):
+        def safe_detect(text: str) -> str:
+            if not isinstance(text, str):
+                return 'en'
+
             try:
-                return self.translate_batch(texts, source_language)
+                langs = detect_langs(text)
+                return langs[0].lang
             except Exception as e:
-                print(f"Error while translating text: {e}")
-                return texts
+                return 'en'  # return a default language when detection fails
+
+        def safe_translation(text, source_language):
+            if not isinstance(text, str):
+                return 'en'
+            try:
+                langs = detect_langs(text)
+                return langs[0].lang
+            except Exception as e:
+                return text
 
         texts = data['Content'].tolist()
         translated_texts = []
         for i in tqdm(range(0, len(texts), batch_size), desc="Translating"):
             batch = texts[i:i + batch_size]
-            source_languages = [detect(text) for text in batch]
+            source_languages = [safe_detect(text) for text in batch]
             batch_translations = [safe_translation([text], lang) for text, lang in zip(batch, source_languages)]
             translated_texts.extend(batch_translations)
 
